@@ -1,0 +1,4 @@
+# Escludi il file .env contenente variabili d'ambiente
+.env
+#Escludi i documenti
+*.pdf
