@@ -101,9 +101,7 @@ class QuestionGen:
         dataframes = self.load_file()
         
         # Estrai tutte le domande
-        all_questions = []
-        question_index = 0
-        
+        all_questions = []        
         for sheet_name, df in dataframes.items():
             if 'Evaluation Questions' not in df.columns:
                 self.logger.warning(f"Colonna 'Evaluation Questions' non trovata nel foglio {sheet_name}")
@@ -112,8 +110,8 @@ class QuestionGen:
             for _, row in df.iterrows():
                 question = row.get('Evaluation Questions')
                 if pd.notnull(question):  # Controlla se la domanda non è nulla
-                    all_questions.append(f"{question_index}. {question}")
-                    question_index += 1
+                    all_questions.append(f"{question}")
+                    
         
         return all_questions
 

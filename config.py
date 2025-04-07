@@ -13,15 +13,14 @@ RESULTS_DIR = BASE_DIR / "results"
 RESPONSES_PATH = RESULTS_DIR / "responses.csv"
 
 # Parametri RAG
-CHUNK_SIZE_PARENT = 2000
-CHUNK_SIZE_CHILD = 400
+CHUNK_SIZE_PARENT = 8192
+CHUNK_SIZE_CHILD = 512
 CHUNK_OVERLAP = 100
-RETRIEVER_K = 5
+RETRIEVER_K = 7
 
 # Parametri LLM
-LLM_MODEL = "deepseek-r1-distill-qwen-32b"
-LLM_KEYWORD = "llama-3.3-70b-versatile"
-LLM_TEMPERATURE = 0
+LLM_MODEL = "gemma2-9b-it"
+LLM_TEMPERATURE = 0.5
 
 # OpenAI API (da impostare come variabile d'ambiente)
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')

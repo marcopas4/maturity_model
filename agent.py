@@ -1,22 +1,26 @@
-
-from typing import List
-from langchain.retrievers import ParentDocumentRetriever
-from utils.questionGen import QuestionGen
-import config as cfg
-import utils.document_loader as dl
-import torch
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_community.docstore.in_memory import InMemoryDocstore
-import faiss
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.storage import InMemoryStore
-from langchain.prompts import ChatPromptTemplate
-from langchain_groq import ChatGroq
-from langchain_core.output_parsers import StrOutputParser
+from pathlib import Path
 import time
-import pandas as pd
-from langchain_core.runnables import RunnablePassthrough
+import config as cfg
+from llama_index.core import Settings
+from llama_index.core.storage.docstore import SimpleDocumentStore
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+import os
+from groq import Groq
+import torch
+from llama_index.core.node_parser import (
+    HierarchicalNodeParser,
+)
+import json
+from llama_index.core.schema import Node
+from llama_index.core import SimpleDirectoryReader
+import numpy as np
+from typing import List, Dict, Any
+from langchain_ollama import ChatOllama
+from utils.questionGen import QuestionGen
+import utils.document_loader as dl
+import retriever as rt
+import csv
+import os
 
 class Agent:
     """
@@ -27,20 +31,13 @@ class Agent:
         self.question_id: int = 0# question ID
 
         
-        self.answer: str = None # Answer generated
+        self.answer = None # Answer generated
         self.context: str =None  #  retrieved documents
-        self.retriever :ParentDocumentRetriever = None # Retriever object
-        self.conversation_history: List[dict] = []    # Storico della conversazione
         self.questions: List[str] = []
-        self.llm = ChatGroq(
-            model="deepseek-r1-distill-llama-70b",  
-            temperature=0,  
-            max_tokens=6000,
-            timeout=None,
-            max_retries=2,
-            groq_api_key=cfg.GROQ_API_KEY
-            )
-
+        self.llm = Groq(api_key=cfg.GROQ_API_KEY)
+        self.retriever = None
+        self.nodes = None
+        self.docstore = None
     
         """
         Nodo di inizializzazione:
@@ -54,133 +51,217 @@ class Agent:
             self.questions = QuestionGen().extract_all_questions()
             
             # Inizializza il retirever and vectordb
-            documents = dl.load_documents()
+            docs = dl.load_documents_docling(cfg.DOCUMENTS_DIR)
 
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
                 
 
                 # Configura l'embedding model
-            embed_model = HuggingFaceEmbeddings(
-                    model_name="all-MiniLM-L6-v2",  #sentence-transformers/all-mpnet-base-v2  BAAI/bge-small-en-v1.5
-                    model_kwargs={'device': device}
-                )
-            
-            index = faiss.IndexFlatL2(len(embed_model.embed_query("hello world")))
-            vector_store = FAISS(
-                    embedding_function=embed_model.embed_query,
-                    index=index,
-                    docstore=InMemoryDocstore(),
-                    index_to_docstore_id={},
-                )
-            child_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=cfg.CHUNK_SIZE_CHILD,
-                chunk_overlap=cfg.CHUNK_OVERLAP,
-                length_function=len,
-                )
-            parent_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=cfg.CHUNK_SIZE_PARENT,
-                chunk_overlap=cfg.CHUNK_OVERLAP,
-                length_function=len,
-                )
-            
-            child_retriever = vector_store.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": 5, "fetch_k": 2, "lambda_mult": 0.5},
+            embed_model = HuggingFaceEmbedding(
+                model_name="all-MiniLM-L6-v2",
+                device=device
             )
-            store = InMemoryStore()
-            self.retriever =  ParentDocumentRetriever(
-            vectorstore=vector_store,
-            docstore=store,
-            child_splitter=child_splitter,
-            parent_splitter=parent_splitter,
-            retriever = child_retriever
-            )
+            Settings.embed_model = embed_model 
+        
             
-            self.retriever.add_documents(documents, ids=None)
+            
+            node_parser = HierarchicalNodeParser.from_defaults(
+            chunk_sizes=[512,8192],
+            chunk_overlap=100, 
+                )
+            
+            self.nodes = node_parser.get_nodes_from_documents(docs)
+
+            
+            self.docstore = SimpleDocumentStore()
+
+            # insert nodes into docstore
+            self.docstore.add_documents(self.nodes)
+
+            self.retriever = rt.Retriever(self.docstore, self.nodes)
                 
             
         except Exception as e:
-            print(f"Errore durante l'inizializzazione del retriever: {e}")
+            print(f"Errore durante l'inizializzazione del'Agente: {e}")
             exit(1)
 
-    
-    
-    def set_conversation_history(self,question:str,answer:str):
-        """
-        Set the conversation history
-        """
-        self.conversation_history.append({"question":question,"answer":answer})
-    
-
-
-    def retrieve_context(self,question:str):
-        """
-        Retrieve the context for the question
-        """
-        print("---RETRIEVE---")
-        self.curr_question = question
-        retrieved_docs = self.retriever.invoke(question)
-        self.context = "\n\n".join([doc.page_content for doc in retrieved_docs])
         
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
+    def format_docs(self,docs):
+            return "\n\n".join(doc.get_content() for doc in docs)
+    
+    def retrieve(self,query:str,mode:str) -> List[Node]:
+        print(f"---RETRIEVE MODE---")
+        self.curr_question = query
+
+        if mode == "auto-merging":
+                retrieved_docs = self.retriever.retrieve(query,mode="auto-merging")
+                return retrieved_docs
+        elif mode == "metadata":
+                retrieved_docs = self.retriever.retrieve(query,mode="metadata")
+                return retrieved_docs
+        elif mode == "sparse":
+                retrieved_docs = self.retriever.retrieve(query,mode="sparse")
+                return retrieved_docs
+        else:
+                raise ValueError("Invalid mode. Choose 'auto-merging', 'metadata', or 'sparse'.")
         
+    def grade_context(self,context) -> bool:
+        """
+        Evaluate if the context is relevant for answering the current question.
+        
+        Returns:
+            bool: True if context is relevant, False otherwise
+        
+        Raises:
+            RuntimeError: If LLM completion fails
+            json.JSONDecodeError: If response is not valid JSON
+            ValueError: If response value is not boolean
+        """
+        print("---GRADE CONTEXT---")
+        time.sleep(2)
+        
+        try:
+            completion = self.llm.chat.completions.create(
+                model=cfg.LLM_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Sei un assistente. Valuta se il contenuto di questo contesto è utile anche in minima parte per rispondere alla domanda. Rispondi SOLO in formato JSON contenente una chiave 'response' con valore booleano true o false, esempio: {'response': true}"
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Domanda: {self.curr_question}. Contesto: {context}"
+                    },
+                ],
+                temperature=0.6,
+                top_p=0.95,
+                stream=False,
+                response_format={"type": "json_object"},
+                stop=None,
+            )
+
+            # Parsa la risposta JSON
+            response = completion.choices[0].message.content
+            response_dict = json.loads(response)
+            
+            # Verifica che 'response' contenga un booleano
+            if not isinstance(response_dict.get('response'), bool):
+                raise ValueError("La risposta deve essere un booleano (true/false)")
+                
+            return response_dict['response']
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Errore nel parsing JSON: {str(e)}")
+        except KeyError:
+            raise ValueError("Il JSON non contiene la chiave 'response'")
+        
+
+    def query_expansion(self,query:str) -> str:
+        """
+        Expands the current question using the LLM.
+        
+        Returns:
+            str: Expanded question
+        
+        Raises:
+            RuntimeError: If LLM completion fails
+            json.JSONDecodeError: If response is not valid JSON
+        """
+        print("---QUERY EXPANSION---")
+        time.sleep(2)
+        
+        try:
+            completion = self.llm.chat.completions.create(
+                model=cfg.LLM_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Sei un assistente.Ti verrà data in input una query. Riformula la query mantenendo il significato originale ma usando altri termini. Rispondi SOLO in formato JSON contenente una chiave 'response' con valore stringa, esempio: {'response': 'query espansa'}"
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Domanda: {query}"
+                    },
+                ],
+                temperature=0.6,
+                top_p=0.95,
+                stream=False,
+                response_format={"type": "json_object"},
+                stop=None,
+            )
+            
+            # Parsa la risposta JSON
+            response = completion.choices[0].message.content
+            
+                
+            return response
+            
+        except Exception as e:
+            raise ValueError(f"Errore nella query expansion: {e}")
     
     def generate_answer(self):
-
-        print("---GENERATE---")
-        question = self.curr_question
-        context = self.context
-        prompt = ChatPromptTemplate.from_template(
-            """
-            Rispondi alla seguente domanda basandoti sulle informazioni fornite nel contesto.
-            Se l'informazione non è presente nel contesto, rispondi che non hai abbastanza informazioni.
-            Se l'informazione risulta parziale o ambigua, esponi ciò che hai capito in due righe massimo.
-            
-            Contesto:
-            {context}
-            
-            Domanda: {question}
-            
-            Risposta:
-            """
+        print("---GENERATE ANSWER---")
+        time.sleep(2)
+        completion = self.llm.chat.completions.create(
+            model=cfg.LLM_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Rispondi alla domanda in formato JSON usando questo schema : {response : str} , dove str è una stringa compresa tra queste risposte standard, utilizzando il contesto fornito. Le stringhe standard sono : 1) Si ; 2)Si ,ma senza una struttura ben definita; 3)No."
+                },
+                {
+                    "role": "user",
+                    "content": f"Domanda: {self.curr_question}. Contesto: {self.context}"
+                },
+            ],
+            temperature=0.6,
+            top_p=0.95,
+            stream=False,
+            response_format={"type": "json_object"},
+            stop=None,
         )
+        self.answer = completion.choices[0].message.content
 
-        qa_chain = (
-            {
-                "context": lambda x :context,
-                "question": lambda x :question,
-            }
-            | prompt
-            |self.llm
-            |StrOutputParser()
-            )
-        try:
-            print("Chiamata ad LLM \n\n")
-            time.sleep(2) ## rate limits
-            self.answer = qa_chain.invoke(question)
-            self.set_conversation_history(question,self.answer)
-            return self.answer
-        except Exception as e:
-            print(f"Errore durante la generazione della risposta: {e}")
-            exit(1)
+
+    def compile_and_save(self,answer:str):
+        """
+        Save current question and answer to a CSV file.
+        If the file doesn't exist, it will be created with headers.
+        """
+        print("---COMPILE AND SAVE---")
         
-    def file_save(self):
-            """
-            Salva la risposta in un file
-            """
-            print("---COMPILE---")
-            new_row = pd.DataFrame({
-                "ID": [self.question_id],
-                "question": [self.curr_question],
-                "response": [self.answer]
-            })
-            try:
-                existing_df = pd.read_csv(cfg.RESPONSES_PATH)
-                updated_df = pd.concat([existing_df, new_row], ignore_index=True)
-            except FileNotFoundError:
-                updated_df = new_row
-            updated_df.to_csv(cfg.RESPONSES_PATH, index=False)
-            print(f"Risposta salvata per la domanda: {self.question_id}")
+        
+        
+        # Define the CSV file path
+        csv_file = 'results/responses.csv'
+        os.makedirs('output', exist_ok=True)
+        
+        # Check if file exists to determine if headers need to be written
+        file_exists = os.path.isfile(csv_file)
+        
+        # Open file in append mode
+        with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
             
+            # Write headers if file is new
+            if not file_exists:
+                writer.writerow(['Question ID', 'Question', 'Answer', 'Timestamp'])
             
+            # Write the current Q&A pair
+            writer.writerow([
+                self.question_id,
+                self.curr_question,
+                answer,
+                time.strftime('%Y-%m-%d %H:%M:%S')
+            ])
+        
+        print(f"Saved Q&A to {csv_file}")
+
+
+
+
+
+
+
+
+

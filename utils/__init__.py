@@ -1,1 +1,2 @@
-from utils.document_loader import load_documents
+import utils.document_loader
+import utils.questionGen
