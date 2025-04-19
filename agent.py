@@ -5,7 +5,6 @@ from llama_index.core import Settings
 from llama_index.core.storage.docstore import SimpleDocumentStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 import os
-from groq import Groq
 import torch
 from llama_index.core.node_parser import (
     HierarchicalNodeParser,
@@ -21,20 +20,32 @@ import utils.document_loader as dl
 import retriever as rt
 import csv
 import os
-
+from openai import OpenAI
+import structured_classes as sc
 class Agent:
     """
-    Agent is the object that contains the state of the conversation
+    Manages conversation state, document retrieval, and answer generation using LLMs.
+    
+    Attributes:
+        curr_question (str): Current question being processed
+        question_id (int): Unique identifier for current question
+        answer (Any): Generated answer from LLM
+        context (str): Retrieved document context
+        questions (List[str]): List of questions to process
+        llm (OpenAI): LLM client instance using Groq's API
+        retriever (Retriever): Document retrieval instance
+        nodes (List[Node]): Document nodes for retrieval
+        docstore (SimpleDocumentStore): Document storage system
     """
     def __init__(self):
         self.curr_question: str = None  # qestionnaire question
         self.question_id: int = 0# question ID
 
-        
-        self.answer = None # Answer generated
-        self.context: str =None  #  retrieved documents
         self.questions: List[str] = []
-        self.llm = Groq(api_key=cfg.GROQ_API_KEY)
+        self.llm = client = OpenAI(
+                api_key=os.environ.get("GROQ_API_KEY"),
+                base_url="https://api.groq.com/openai/v1"  # URL base per Groq
+            )
         self.retriever = None
         self.nodes = None
         self.docstore = None
@@ -66,7 +77,7 @@ class Agent:
             
             
             node_parser = HierarchicalNodeParser.from_defaults(
-            chunk_sizes=[512,8192],
+            chunk_sizes=[256,4096],
             chunk_overlap=100, 
                 )
             
@@ -89,7 +100,20 @@ class Agent:
     def format_docs(self,docs):
             return "\n\n".join(doc.get_content() for doc in docs)
     
-    def retrieve(self,query:str,mode:str) -> List[Node]:
+    def retrieve(self, query: str, mode: str) -> List[Node]:
+        """
+        Retrieves relevant documents using specified mode.
+        
+        Args:
+            query (str): Search query
+            mode (str): Retrieval mode ('auto-merging', 'metadata', or 'sparse')
+            
+        Returns:
+            List[Node]: List of retrieved document nodes
+            
+        Raises:
+            ValueError: If invalid mode specified
+        """
         print(f"---RETRIEVE MODE---")
         self.curr_question = query
 
@@ -105,136 +129,197 @@ class Agent:
         else:
                 raise ValueError("Invalid mode. Choose 'auto-merging', 'metadata', or 'sparse'.")
         
-    def grade_context(self,context) -> bool:
+    def grade_context(self, query: str, context: str) -> bool:
         """
-        Evaluate if the context is relevant for answering the current question.
+        Evaluates context relevance for the query.
         
+        Args:
+            query (str): User query
+            context (str): Retrieved document context
+            
         Returns:
-            bool: True if context is relevant, False otherwise
-        
+            bool: True if context is relevant
+            
         Raises:
-            RuntimeError: If LLM completion fails
-            json.JSONDecodeError: If response is not valid JSON
-            ValueError: If response value is not boolean
+            RuntimeError: If LLM evaluation fails
         """
         print("---GRADE CONTEXT---")
         time.sleep(2)
         
+        function_schema = {
+            "name": "evaluate_context_relevance",
+            "description": "Valuta se il contesto fornito è rilevante per rispondere alla query",
+            "parameters": sc.RelevanceResponse.model_json_schema()
+        }
+        
+        # Preparazione del prompt
+        system_prompt = """
+        Sei un assistente specializzato nella valutazione della rilevanza dei contenuti.
+        Il tuo compito è determinare se il contesto fornito contiene informazioni pertinenti 
+        che potrebbero aiutare a rispondere alla query dell'utente.
+        
+        Rispondi SOLO con true se il contesto è anche minimamente rilevante per la query,
+        oppure false se il contesto è completamente irrilevante o non aiuterebbe in alcun modo
+        a rispondere alla query.
+        """
+        
         try:
-            completion = self.llm.chat.completions.create(
+            # Chiamata all'API con function calling
+            response = self.llm.chat.completions.create(
                 model=cfg.LLM_MODEL,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "Sei un assistente. Valuta se il contenuto di questo contesto è utile anche in minima parte per rispondere alla domanda. Rispondi SOLO in formato JSON contenente una chiave 'response' con valore booleano true o false, esempio: {'response': true}"
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Domanda: {self.curr_question}. Contesto: {context}"
-                    },
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Query: {query}\n\nContesto: {context}"}
                 ],
-                temperature=0.6,
-                top_p=0.95,
-                stream=False,
-                response_format={"type": "json_object"},
-                stop=None,
+                tools=[{"type": "function", "function": function_schema}],
+                tool_choice={"type": "function", "function": {"name": "evaluate_context_relevance"}}
             )
-
-            # Parsa la risposta JSON
-            response = completion.choices[0].message.content
-            response_dict = json.loads(response)
             
-            # Verifica che 'response' contenga un booleano
-            if not isinstance(response_dict.get('response'), bool):
-                raise ValueError("La risposta deve essere un booleano (true/false)")
-                
-            return response_dict['response']
+            # Estrazione e validazione del risultato
+            function_call = response.choices[0].message.tool_calls[0].function
+            function_args = function_call.arguments
             
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Errore nel parsing JSON: {str(e)}")
-        except KeyError:
-            raise ValueError("Il JSON non contiene la chiave 'response'")
+            # Validazione con Pydantic
+            result = sc.RelevanceResponse.model_validate_json(function_args)
+            
+            return result.is_relevant
+        except Exception as e:
+            raise RuntimeError(f"Errore durante la valutazione della rilevanza: {str(e)}")
         
 
-    def query_expansion(self,query:str) -> str:
+    def query_expansion(self, query: str) -> str:
         """
-        Expands the current question using the LLM.
+        Expands query using LLM for better retrieval.
         
+        Args:
+            query (str): Original query
+            
         Returns:
-            str: Expanded question
-        
+            str: Expanded query
+            
         Raises:
-            RuntimeError: If LLM completion fails
-            json.JSONDecodeError: If response is not valid JSON
+            ValueError: If expansion fails
         """
         print("---QUERY EXPANSION---")
         time.sleep(2)
         
         try:
-            completion = self.llm.chat.completions.create(
-                model=cfg.LLM_MODEL,
+            
+            function_schema = {
+            "name": "generate_expanded_queries",
+            "description": "Genera query espanse e parole chiave da una query originale",
+            "parameters": sc.ExpandedQuery.model_json_schema()
+            }
+    
+            # Preparazione del prompt
+            system_prompt = """
+            Sei un assistente esperto in information retrieval. Il tuo compito è espandere la query dell'utente 
+            in modo da migliorare il recupero dei documenti rilevanti. Genera una versione alternativa della query. 
+            Restituisci sempre e solo un output strutturato JSON valido.
+            """
+            
+            # Chiamata all'API con la function call
+            response = self.llm.chat.completions.create(
+                model=cfg.LLM_RES_MODEL,  # o il modello Groq che stai utilizzando
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "Sei un assistente.Ti verrà data in input una query. Riformula la query mantenendo il significato originale ma usando altri termini. Rispondi SOLO in formato JSON contenente una chiave 'response' con valore stringa, esempio: {'response': 'query espansa'}"
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Domanda: {query}"
-                    },
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Espandi questa query: {query}"}
                 ],
-                temperature=0.6,
-                top_p=0.95,
-                stream=False,
-                response_format={"type": "json_object"},
-                stop=None,
+                tools=[{"type": "function", "function": function_schema}],
+                tool_choice={"type": "function", "function": {"name": "generate_expanded_queries"}}
             )
             
-            # Parsa la risposta JSON
-            response = completion.choices[0].message.content
+            # Estrazione del contenuto della function call
+            function_call = response.choices[0].message.tool_calls[0].function
+            function_args = function_call.arguments
             
-                
+            # Parsing del JSON e validazione con Pydantic
+            expanded_query = sc.ExpandedQuery.model_validate_json(function_args)
+            response = expanded_query.expanded_query
             return response
             
         except Exception as e:
             raise ValueError(f"Errore nella query expansion: {e}")
     
-    def generate_answer(self):
-        print("---GENERATE ANSWER---")
-        time.sleep(2)
-        completion = self.llm.chat.completions.create(
-            model=cfg.LLM_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Rispondi alla domanda in formato JSON usando questo schema : {response : str} , dove str è una stringa compresa tra queste risposte standard, utilizzando il contesto fornito. Le stringhe standard sono : 1) Si ; 2)Si ,ma senza una struttura ben definita; 3)No."
-                },
-                {
-                    "role": "user",
-                    "content": f"Domanda: {self.curr_question}. Contesto: {self.context}"
-                },
-            ],
-            temperature=0.6,
-            top_p=0.95,
-            stream=False,
-            response_format={"type": "json_object"},
-            stop=None,
-        )
-        self.answer = completion.choices[0].message.content
-
-
-    def compile_and_save(self,answer:str):
+    def generate_answer(self, query: str, context: str) -> sc.PredefinedAnswer:
         """
-        Save current question and answer to a CSV file.
-        If the file doesn't exist, it will be created with headers.
+        Generates predefined answer based on query and context.
+        
+        Args:
+            query (str): User query
+            context (str): Retrieved context
+            
+        Returns:
+            PredefinedAnswer: One of three possible responses:
+                - "Si"
+                - "No"
+                - "Si, ma senza una struttura ben definita"
+        """
+        print("---GENERATE ANSWER---")
+        
+            # Definizione dello schema della funzione per l'API OpenAI
+        function_schema = {
+            "name": "select_predefined_response",
+            "description": "Seleziona una delle risposte predefinite basata sulla query dell'utente",
+            "parameters": sc.ResponseGenerator.model_json_schema()
+        }
+        
+        # Preparazione del prompt
+        system_prompt = """
+        Sei un assistente che deve selezionare una risposta tra tre opzioni predefinite:
+        1. "Si"
+        2. "No" 
+        3. "Si, ma senza una struttura ben definita"
+        
+        Analizza attentamente la query dell'utente e seleziona l'opzione più appropriata in base al contesto fornito.
+        Non inventare altre risposte o formati. Devi restituire SOLO una delle tre opzioni specificate.
+        """
+        
+        # Chiamata all'API con la function call
+        response = self.llm.chat.completions.create(
+            model=cfg.LLM_RES_MODEL,  # o il modello Groq che stai utilizzando
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Query: {query}\n Context: {context}"}
+            ],
+            tools=[{"type": "function", "function": function_schema}],
+            tool_choice={"type": "function", "function": {"name": "select_predefined_response"}}
+        )
+        
+        # Estrazione del contenuto della function call
+        function_call = response.choices[0].message.tool_calls[0].function
+        function_args = function_call.arguments
+        
+        # Parsing del JSON e validazione con Pydantic
+        result = sc.ResponseGenerator.model_validate_json(function_args)
+        print(f"Selected response: {result.selected_response}")
+        print(f"Justification: {result.justification}")
+        return result.selected_response
+        
+
+
+    def compile_and_save(self, answer: str):
+        """
+        Saves Q&A pair to CSV file.
+        
+        Args:
+            answer (str): Generated answer
+            
+        Creates CSV with columns:
+            - Question ID
+            - Question
+            - Answer
+            - Timestamp
+            
+        File location: cfg.RESULTS_DIR/responses.csv
         """
         print("---COMPILE AND SAVE---")
         
         
         
         # Define the CSV file path
-        csv_file = 'results/responses.csv'
-        os.makedirs('output', exist_ok=True)
+        csv_file = os.path.join(cfg.RESULTS_DIR, 'responses.csv')
+        os.makedirs(cfg.RESULTS_DIR, exist_ok=True)
         
         # Check if file exists to determine if headers need to be written
         file_exists = os.path.isfile(csv_file)
