@@ -1,5 +1,4 @@
 from llama_index.core.retrievers import AutoMergingRetriever
-from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.vector_stores.faiss import FaissVectorStore
 from llama_index.core import Settings, VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import get_leaf_nodes, get_root_nodes

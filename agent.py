@@ -29,8 +29,6 @@ class Agent:
     Attributes:
         curr_question (str): Current question being processed
         question_id (int): Unique identifier for current question
-        answer (Any): Generated answer from LLM
-        context (str): Retrieved document context
         questions (List[str]): List of questions to process
         llm (OpenAI): LLM client instance using Groq's API
         retriever (Retriever): Document retrieval instance
@@ -44,16 +42,16 @@ class Agent:
         self.questions: List[str] = []
         self.llm = client = OpenAI(
                 api_key=os.environ.get("GROQ_API_KEY"),
-                base_url="https://api.groq.com/openai/v1"  # URL base per Groq
+                base_url="https://api.groq.com/openai/v1"  # URL base for Groq
             )
         self.retriever = None
         self.nodes = None
         self.docstore = None
     
         """
-        Nodo di inizializzazione:
-        1. Carica il questionario da un dataframe
-        2. Inizializza i documenti per il retrieval RAG
+        Initialization node:
+        1. Load questionnaire from dataframe
+        2. Initialize documents for RAG retrieval
         """
         try:
             print("---INIT---")
@@ -166,7 +164,7 @@ class Agent:
         try:
             # Chiamata all'API con function calling
             response = self.llm.chat.completions.create(
-                model=cfg.LLM_MODEL,
+                model=cfg.LLM_TEST,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Query: {query}\n\nContesto: {context}"}
@@ -220,7 +218,7 @@ class Agent:
             
             # Chiamata all'API con la function call
             response = self.llm.chat.completions.create(
-                model=cfg.LLM_RES_MODEL,  # o il modello Groq che stai utilizzando
+                model=cfg.LLM_TEST,  # o il modello Groq che stai utilizzando
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Espandi questa query: {query}"}
@@ -256,7 +254,7 @@ class Agent:
                 - "Si, ma senza una struttura ben definita"
         """
         print("---GENERATE ANSWER---")
-        
+        time.sleep(2)
             # Definizione dello schema della funzione per l'API OpenAI
         function_schema = {
             "name": "select_predefined_response",
@@ -277,7 +275,7 @@ class Agent:
         
         # Chiamata all'API con la function call
         response = self.llm.chat.completions.create(
-            model=cfg.LLM_RES_MODEL,  # o il modello Groq che stai utilizzando
+            model=cfg.LLM_TEST,  # o il modello Groq che stai utilizzando
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Query: {query}\n Context: {context}"}

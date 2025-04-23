@@ -21,6 +21,7 @@ RETRIEVER_K = 7
 # Parametri LLM
 LLM_MODEL = "deepseek-r1-distill-llama-70b"
 LLM_RES_MODEL = "llama-3.3-70b-versatile"
+LLM_TEST = "meta-llama/llama-4-scout-17b-16e-instruct"
 LLM_TEMPERATURE = 0.5
 
 # OpenAI API (da impostare come variabile d'ambiente)
