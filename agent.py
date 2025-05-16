@@ -75,7 +75,7 @@ class Agent:
             
             
             node_parser = HierarchicalNodeParser.from_defaults(
-            chunk_sizes=[256,4096],
+            chunk_sizes=[10000,256],
             chunk_overlap=100, 
                 )
             
@@ -164,7 +164,7 @@ class Agent:
         try:
             # Chiamata all'API con function calling
             response = self.llm.chat.completions.create(
-                model=cfg.LLM_TEST,
+                model=cfg.LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Query: {query}\n\nContesto: {context}"}

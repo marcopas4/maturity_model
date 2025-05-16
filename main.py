@@ -4,6 +4,7 @@ import agent
 import config
 import compile as cp
 
+
 def main():
     """Funzione principale per eseguire il grafo LangGraph."""
     # Assicurati che le directory necessarie esistano
@@ -12,6 +13,7 @@ def main():
     
     # Costruisci ed esegui il grafo
     cp.compile(abot)
+            
     
     print(f"Elaborazione completata. Risultati salvati in {config.RESPONSES_PATH}")
     

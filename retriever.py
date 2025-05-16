@@ -95,7 +95,7 @@ class Retriever:
            
             # Creiamo l'Auto Merging Retriever
         self.auto_merging_retriever = AutoMergingRetriever(
-                simple_ratio_thresh=0.5,
+                simple_ratio_thresh=0.0,
                 vector_retriever=self.base_retriever,
                 storage_context=self.storage_context,
             )
@@ -105,7 +105,7 @@ class Retriever:
                 stemmer=Stemmer.Stemmer("english"),
                 language="english",
             )
-        self.meta_retriever = mtr.MetadataRetriever(embedding_model=self.embed_model, similarity_threshold=0.5, top_k=3, nodes=self.leaf_nodes)
+        self.meta_retriever = mtr.MetadataRetriever(embedding_model=self.embed_model, similarity_threshold=0.5, top_k=5, nodes=self.leaf_nodes)
         self.meta_retriever.nodes = self.meta_retriever.create_nodes_with_metadata(self.meta_retriever.nodes)
                 
         
