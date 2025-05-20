@@ -91,7 +91,7 @@ def compile(agent: Agent) -> None:
             else:
                 answer = "Insufficient context to provide a detailed answer"
             
-            agent.compile_and_save(state['answer'])
+            agent.compile_and_save(state['answer'],state['context'])
             
         except Exception as e:
             logger.error(f"Error processing question {idx + 1}: {e}")

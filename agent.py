@@ -22,6 +22,8 @@ import csv
 import os
 from openai import OpenAI
 import structured_classes as sc
+import pandas as pd
+from openpyxl.styles import Font
 class Agent:
     """
     Manages conversation state, document retrieval, and answer generation using LLMs.
@@ -156,7 +158,7 @@ class Agent:
         Il tuo compito è determinare se il contesto fornito contiene informazioni pertinenti 
         che potrebbero aiutare a rispondere alla query dell'utente.
         
-        Rispondi SOLO con true se il contesto è anche minimamente rilevante per la query,
+        Rispondi SOLO con true se il contesto è rilevante per la query,
         oppure false se il contesto è completamente irrilevante o non aiuterebbe in alcun modo
         a rispondere alla query.
         """
@@ -296,49 +298,78 @@ class Agent:
         
 
 
-    def compile_and_save(self, answer: str):
+    def compile_and_save(self, answer: str,context: str):
         """
-        Saves Q&A pair to CSV file.
+        Saves Q&A pair to an Excel file.
         
         Args:
+            question_id (int): Question identifier
+            question (str): Question text
             answer (str): Generated answer
-            
-        Creates CSV with columns:
+                
+        Creates Excel file with columns:
             - Question ID
             - Question
             - Answer
             - Timestamp
             
-        File location: cfg.RESULTS_DIR/responses.csv
+        File location: cfg.RESULTS_DIR/responses.xlsx
         """
         print("---COMPILE AND SAVE---")
         
-        
-        
-        # Define the CSV file path
-        csv_file = os.path.join(cfg.RESULTS_DIR, 'responses.csv')
+        excel_file = os.path.join(cfg.RESULTS_DIR, 'responses.xlsx')
         os.makedirs(cfg.RESULTS_DIR, exist_ok=True)
         
-        # Check if file exists to determine if headers need to be written
-        file_exists = os.path.isfile(csv_file)
+        new_data = pd.DataFrame({
+            'Question ID': [self.question_id],
+            'Question': [self.curr_question],
+            'Answer': [answer],
+            'Context': [context],
+            'Timestamp': [time.strftime('%Y-%m-%d %H:%M:%S')]
+        })
         
-        # Open file in append mode
-        with open(csv_file, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
+        try:
+            if os.path.isfile(excel_file):
+                existing_df = pd.read_excel(excel_file)
+                updated_df = pd.concat([existing_df, new_data], ignore_index=True)
+            else:
+                updated_df = new_data
+                
+            # Create a new Excel writer object
+            writer = pd.ExcelWriter(excel_file, engine='openpyxl')
             
-            # Write headers if file is new
-            if not file_exists:
-                writer.writerow(['Question ID', 'Question', 'Answer', 'Timestamp'])
+            # Write the DataFrame without index
+            updated_df.to_excel(writer, sheet_name='Responses', index=False)
             
-            # Write the current Q&A pair
-            writer.writerow([
-                self.question_id,
-                self.curr_question,
-                answer,
-                time.strftime('%Y-%m-%d %H:%M:%S')
-            ])
-        
-        print(f"Saved Q&A to {csv_file}")
+            # Access the worksheet
+            workbook = writer.book
+            worksheet = workbook['Responses']
+            
+            # Set column widths
+            column_widths = {
+                'A': 12,  # Question ID
+                'B': 50,  # Question
+                'C': 20,  # Answer
+                'D': 50,  # Context
+                'E': 20   # Timestamp
+            }
+            
+            for col, width in column_widths.items():
+                worksheet.column_dimensions[col].width = width
+            
+            # Style header row
+            header_font = Font(bold=True)
+            for cell in worksheet[1]:
+                cell.font = header_font
+                
+            # Save and close
+            writer.close()
+            
+            print(f"Saved Q&A to {excel_file}")
+            
+        except Exception as e:
+            print(f"Error while handling Excel file: {e}")
+            raise
 
 
 
