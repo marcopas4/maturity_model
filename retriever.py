@@ -6,7 +6,6 @@ from llama_index.core.schema import TextNode
 from llama_index.retrievers.bm25 import BM25Retriever
 import Stemmer
 import faiss
-import metadata_retriever as mtr
 from typing import List
 
 
@@ -26,11 +25,6 @@ class Retriever:
        - English stemming and stop words removal
        - Traditional information retrieval approach
        
-    3. Metadata-based Retrieval:
-       - Filtering based on document metadata
-       - Semantic similarity with embeddings
-       - Configurable similarity threshold
-       - Returns top-k most relevant results
 
     Attributes:
         docstore: Document storage backend for managing text nodes
@@ -90,35 +84,32 @@ class Retriever:
         )
                 
         # Otteniamo il retriever base
-        self.base_retriever = self.vector_index.as_retriever(similarity_top_k=7)
+        self.base_retriever = self.vector_index.as_retriever(similarity_top_k=15)
 
            
             # Creiamo l'Auto Merging Retriever
         self.auto_merging_retriever = AutoMergingRetriever(
-                simple_ratio_thresh=0.0,
+                simple_ratio_thresh=0.2,
                 vector_retriever=self.base_retriever,
                 storage_context=self.storage_context,
             )
         self.sparse_retriever = BM25Retriever(
-                similarity_top_k=7,
+                similarity_top_k=15,
                 nodes=self.nodes,
                 stemmer=Stemmer.Stemmer("english"),
                 language="english",
             )
-        self.meta_retriever = mtr.MetadataRetriever(embedding_model=self.embed_model, similarity_threshold=0.5, top_k=5, nodes=self.leaf_nodes)
-        self.meta_retriever.nodes = self.meta_retriever.create_nodes_with_metadata(self.meta_retriever.nodes)
+        
                 
         
-    def retrieve(self, query: str, mode: str = "auto-merging") -> List[TextNode]:
+    def retrieve(self, query: str) -> List[TextNode]:
         """
         Retrieve relevant documents using the specified retrieval strategy.
 
         Args:
             query (str): The search query string
-            mode (str): Retrieval strategy to use. Options:
-                - "auto-merging": Hierarchical retrieval with smart merging
-                - "bm25": BM25 algorithm for keyword matching
-                - "metadata": Metadata-based filtering with embeddings
+
+            
 
         Returns:
             List[TextNode]: Retrieved document nodes, ordered by relevance
@@ -138,22 +129,14 @@ class Retriever:
             ...     "gradient descent algorithm",
             ...     mode="bm25"
             ... )
-            >>> 
-            >>> # Metadata retrieval
-            >>> results = retriever.retrieve(
-            ...     "neural networks",
-            ...     mode="metadata"
-            ... )
+          
         """
         try:
-            if mode == "metadata":
-                self.nodes = self.meta_retriever.filter_nodes(query)
-                return self.nodes
-            if mode == "bm25":
-                return self.sparse_retriever.retrieve(query)
-            if mode == "auto-merging":
-                return self.auto_merging_retriever.retrieve(query)
-                        
+            auto_merging_results = self.auto_merging_retriever.retrieve(query)
+            sparse_results = self.sparse_retriever.retrieve(query)
+            # Uniamo i risultati dei due retriever
+            combined_results = auto_merging_results + sparse_results
+            return combined_results                
         except Exception as e:
             raise ValueError(f"Retrieval failed: {str(e)}")
 

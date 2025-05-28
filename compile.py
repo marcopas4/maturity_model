@@ -6,9 +6,6 @@ from agent import Agent
 def compile(agent: Agent) -> None:
     """
     Compile answers for maturity model questions using the provided agent.
-    
-    Args:
-        agent (Agent): Agent instance to process questions and generate answers
     """
     MAX_ATTEMPTS = 5
     logging.basicConfig(level=logging.INFO)
@@ -18,11 +15,11 @@ def compile(agent: Agent) -> None:
         """Reset all state variables for new question"""
         return {
             'grade': False,
-            'expanded': False,
             'attempt_count': 0,
             'context': None,
             'retrieved_docs': None,
-            'answer': None 
+            'answer': None,
+            'justification':None
         }
 
     for idx, question in enumerate(agent.questions):
@@ -31,71 +28,60 @@ def compile(agent: Agent) -> None:
         # Reset state for new question
         state = reset_state()
         
-        # Initial retrieval with auto-merging
+        # Initial retrieval
         try:
-            state['retrieved_docs'] = agent.retrieve(query=question, mode="auto-merging")
+            state['retrieved_docs'] = agent.retrieve(query=question)
+            expanded_query = agent.query_expansion(question)
+
         except Exception as e:
             logger.error(f"Initial retrieval failed: {e}")
-            agent.compile_and_save("Error: Initial retrieval failed")
+            agent.compile_and_save(question=question,answer="Error: Initial retrieval failed",context= None, justification=None)
             agent.question_id += 1
             continue
-
-        # Main processing loop - with total attempt limit
+        
+        for query in expanded_query:
+            contexts = agent.retrieve(query=query)
+            state['retrieved_docs'] += contexts
+        
+        try:
+            state['retrieved_docs'] = agent.deduplicate_post_reranking(state['retrieved_docs'])  # Remove duplicates
+            #rerank documents
+            state['retrieved_docs'] = agent.rerank(query=question,contexts=state['retrieved_docs'])
+            if not state['retrieved_docs']:
+                raise ValueError("No relevant documents found after reranking")
+            logger.info(f"Reranked {len(state['retrieved_docs'])} documents for question {idx + 1}")
+        except Exception as e:
+            logger.error(f"Reranking failed: {e}")
+            agent.compile_and_save(question,"Error: Reranking failed", None,None)
+            agent.question_id += 1
+            continue
+        #grade question
         while not state['grade'] and state['attempt_count'] < MAX_ATTEMPTS:
-            doc_idx = 0
-            
-            # Try each retrieved document
-            while doc_idx < len(state['retrieved_docs']) and not state['grade']:
-                try:
-                    content = state['retrieved_docs'][doc_idx].get_content()
-                    state['grade'] = agent.grade_context(query=question, context=content)
-                    
-                    if state['grade']:
-                        state['context'] = content
-                        break
-                    
-                except Exception as e:
-                    logger.error(f"Error processing document {doc_idx + 1}: {e}")
-                
-                doc_idx += 1
+            try:
+                state['grade'] = agent.grade_context(query=question,context=state['retrieved_docs'][state['attempt_count']])
+                if state['grade']:
+                    state['context'] = state['retrieved_docs'][state['attempt_count']]
+                    state['answer'],state['justification'] = agent.generate_answer(query=question,context=state['context'])
+                    agent.compile_and_save(question=question,answer=state['answer'], justification=state['justification'],context=state['context'])
+                    logger.info(f"Successfully answered question {idx + 1}")
+                    agent.question_id += 1
+                    break
+                else:
+                    state['attempt_count'] += 1
+            except Exception as e:
+                logger.error(f"Attempt {state['attempt_count'] + 1} failed: {e}")
                 state['attempt_count'] += 1
                 
-                # Exit if we've reached maximum attempts
-                if state['attempt_count'] >= MAX_ATTEMPTS:
-                    break
+        if not state['grade']:
+            try:
+                agent.compile_and_save(question=question,answer="No", justification="No relevant documents found", context=None)
+                agent.question_id += 1
+            except Exception as e:
+                logger.error(f"Failed to save answer for question {idx + 1}: {e}")
 
-            # If no relevant context found and not yet expanded, try query expansion
-            if not state['grade'] and not state['expanded'] :
-                try:
-                    logger.info("Trying query expansion...")
-                     
-                    expanded_query = agent.query_expansion(question)
-                    state['retrieved_docs'] = agent.retrieve(query=expanded_query, mode="auto-merging")
-                    state['expanded'] = True
-                    # Count this as an attempt
-                    state['attempt_count'] = 0
-                    # Continue to process the new documents
-                    continue
-                except Exception as e:
-                    logger.error(f"Query expansion failed: {e}")
-                    break
-            
-            # If we reach here, either we've found a good context or exhausted all options
-            break
 
-        # Generate and save answer
-        try:
-            if state['grade'] and state['context']:
-                answer = agent.generate_answer(context=state['context'], query=question)
-                state['answer'] = answer
-            else:
-                answer = "Insufficient context to provide a detailed answer"
-            
-            agent.compile_and_save(state['answer'],state['context'])
-            
-        except Exception as e:
-            logger.error(f"Error processing question {idx + 1}: {e}")
-            agent.compile_and_save(f"Error: {str(e)}")
-        
-        # Always increment question_id at the end
-        agent.question_id += 1
+
+
+
+
+
