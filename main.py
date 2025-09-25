@@ -3,7 +3,7 @@ import os
 import agent
 import config
 import compile as cp
-
+import utils.document_loader as doc_loader
 
 def main():
     """Funzione principale per eseguire il grafo LangGraph."""
@@ -13,7 +13,7 @@ def main():
     
     # Costruisci ed esegui il grafo
     cp.compile(abot)
-            
+    
     
     print(f"Elaborazione completata. Risultati salvati in {config.RESPONSES_PATH}")
     

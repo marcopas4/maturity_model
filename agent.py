@@ -24,7 +24,7 @@ from openai import OpenAI
 import pandas as pd
 from openpyxl.styles import Font
 import cohere
-from sklearn.metrics.pairwise import cosine_similarity
+
 
 class Agent:
     """
@@ -198,7 +198,7 @@ class Agent:
         try:
             # Chiamata all'API con function calling
             response = self.llm.chat.completions.create(
-                model="llama-3.3-70b",
+                model=cfg.LLM_LLAMA_70B, 
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Query: {query}\n\nContesto: {context}"}

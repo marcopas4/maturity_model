@@ -348,15 +348,3 @@ def available_cross_encoder_models():
         ]
     }
 
-# Esecuzione di esempio
-
-    # Dimostra l'utilizzo del reranker
-demonstrate_cross_encoder_reranker()
-    
-    # Mostra i modelli disponibili
-models = available_cross_encoder_models()
-print("\nPrincipali modelli cross-encoder disponibili:")
-for category, model_list in models.items():
-        print(f"\n{category}:")
-        for model in model_list:
-            print(f"- {model}")

@@ -6,7 +6,6 @@ from llama_index.core import Document
 from docling.document_converter import DocumentConverter
 
 
-
 def load_documents_pymupdf(directory: Path) -> list:
     """Carica tutti i documenti PDF dalla directory specificata."""
     documents = []
@@ -17,6 +16,7 @@ def load_documents_pymupdf(directory: Path) -> list:
         try:
             docs = reader.load_data(file_path)
             doc_text = "\n\n".join([d.get_content() for d in docs])
+            #doc_text = cleaner.clean_text(doc_text)
             doc_text = Document(text=doc_text)
             documents.append(doc_text)
             print(f"Caricato: {file_path.name}")
@@ -41,14 +41,13 @@ def load_documents_docling(directory: Path) -> List[Document]:
     """
     documents = []
     converter = DocumentConverter()
-    
     # Iterate through all PDF files in directory
     for file_path in directory.glob("*.pdf"):
         try:
             # Convert PDF to text using docling
             doc_text = converter.convert(file_path)
             docling_text = doc_text.document.export_to_markdown()
-            
+            #docling_text = cleaner.clean_text(docling_text)
             # Create Document object
             document = Document(text=docling_text)
             documents.append(document)
