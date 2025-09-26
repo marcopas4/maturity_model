@@ -10,6 +10,7 @@ def main():
     # Assicurati che le directory necessarie esistano
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
     abot = agent.Agent()
+    print(f"Reranker: {type(abot.reranker).__name__}")
     
     # Costruisci ed esegui il grafo
     cp.compile(abot)

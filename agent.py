@@ -23,7 +23,7 @@ import os
 from openai import OpenAI
 import pandas as pd
 from openpyxl.styles import Font
-import cohere
+from jina_reranker import JinaReranker
 
 
 class Agent:
@@ -66,10 +66,9 @@ class Agent:
             # Inizializza il retirever and vectordb
             docs = dl.load_documents_pymupdf(cfg.DOCUMENTS_DIR)
 
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                
+            device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
-                # Configura l'embedding model
+            # Configura l'embedding model
             embed_model = HuggingFaceEmbedding(
                 model_name="all-MiniLM-L6-v2",
                 device=device
@@ -92,7 +91,16 @@ class Agent:
             self.docstore.add_documents(self.nodes)
 
             self.retriever = rt.Retriever(self.docstore, self.nodes)
-            self.reranker = cohere.Client(api_key=cfg.COHERE_API_KEY)
+            # Instantiate JinaReranker (drop-in replacement for Cohere reranker)
+            # You can customize model_name/device/use_fp16 via config if needed
+            self.reranker = JinaReranker(
+                model_name=getattr(cfg, "JINA_MODEL_NAME", None) or "jinaai/jina-reranker-v2-base-multilingual",
+                device=None,  # let JinaReranker auto-detect cuda/mps/cpu
+                use_fp16=getattr(cfg, "JINA_USE_FP16", True),
+                batch_size=getattr(cfg, "JINA_BATCH_SIZE", 32),
+                max_length=getattr(cfg, "JINA_MAX_LENGTH", 1024),
+                cache_dir=getattr(cfg, "JINA_CACHE_DIR", "./models")
+            )
                 
             
         except Exception as e:
@@ -457,7 +465,7 @@ class Agent:
                 unique_contexts.append(context)
         
         return unique_contexts
-        
+
 
 
 

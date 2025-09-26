@@ -25,7 +25,7 @@ LLM_LLAMA_SCOUT = "llama-4-scout-17b-16e-instruct"
 LLM_TEMPERATURE = 0.2
 
 # OpenAI API (da impostare come variabile d'ambiente)
-GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-COHERE_API_KEY = os.getenv('COHERE_API_KEY')
+'''GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+COHERE_API_KEY = os.getenv('COHERE_API_KEY')'''
 CEREBRAS_API_KEY = os.getenv('CEREBRAS_API_KEY')
 
