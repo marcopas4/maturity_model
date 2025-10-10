@@ -21,9 +21,8 @@ RETRIEVER_K = 15
 # Parametri LLM
 LLM_QWEN = "qwen-3-32b"
 LLM_LLAMA_70B = "llama-3.3-70b"
-LLM_LLAMA_SCOUT = "llama-4-scout-17b-16e-instruct"
 LLM_TEMPERATURE = 0.2
-
+LLM_GPT_OSS = "gpt-oss-120b"
 # OpenAI API (da impostare come variabile d'ambiente)
 '''GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 COHERE_API_KEY = os.getenv('COHERE_API_KEY')'''

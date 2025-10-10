@@ -10,11 +10,8 @@ from llama_index.core.node_parser import (
     HierarchicalNodeParser,
 )
 import json
-from llama_index.core.schema import Node
-from llama_index.core import SimpleDirectoryReader
 import numpy as np
-from typing import List, Dict, Any
-from langchain_ollama import ChatOllama
+from typing import List
 from utils.questionGen import QuestionGen
 import utils.document_loader as dl
 import retriever as rt
@@ -24,6 +21,8 @@ from openai import OpenAI
 import pandas as pd
 from openpyxl.styles import Font
 from jina_reranker import JinaReranker
+import logging
+import traceback
 
 
 class Agent:
@@ -40,7 +39,7 @@ class Agent:
         docstore (SimpleDocumentStore): Document storage system
     """
     def __init__(self):
-        self.question_id: int = 0# question ID
+        self.question_id: int = 123# question ID
 
         self.questions: List[str] = []
         self.llm = OpenAI(
@@ -59,20 +58,23 @@ class Agent:
         """
         try:
             print("---INIT---")
-            # Estrae le domande dal file Excel
-            
             self.questions = QuestionGen().extract_all_questions()
-            
-            # Inizializza il retirever and vectordb
-            docs = dl.load_documents_pymupdf(cfg.DOCUMENTS_DIR)
+            docs = dl.load_all_documents(cfg.DOCUMENTS_DIR)
 
             device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
-            # Configura l'embedding model
+            # Configura l'embedding model con maggiore determinismo
             embed_model = HuggingFaceEmbedding(
-                model_name="all-MiniLM-L6-v2",
+                model_name="Qwen/Qwen3-Embedding-0.6B",
                 device=device
+                
             )
+            
+            # Set seeds per determinismo (se supportato)
+            torch.manual_seed(42)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(42)
+            
             Settings.embed_model = embed_model 
         
             
@@ -114,139 +116,83 @@ class Agent:
     def retrieve(self, query: str) -> List[str]:
         """
         Retrieves relevant documents using specified mode.
-        
-        Args:
-            query (str): Search query
-            mode (str): Retrieval mode ('auto-merging', 'metadata', or 'sparse')
-            
-        Returns:
-            List[Node]: List of retrieved document nodes
-            
-        Raises:
-            ValueError: If invalid mode specified
         """
-        try:
-            print(f"---RETRIEVE MODE---")
-            contexts = []
-            response = self.retriever.retrieve(query)
-            for doc in response:
-                contexts.append(doc.get_content())
-            return contexts
+        logger = logging.getLogger(__name__)
+        max_retries = 3
+        backoff = 1.0
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"RETRIEVE MODE - Attempt {attempt}/{max_retries} - Query: {query[:100]}...")
+                contexts = []
+                response = self.retriever.retrieve(query)
+                
+                if not response:
+                    logger.warning("Retriever returned empty response")
+                    return []
+                
+                for doc in response:
+                    contexts.append(doc.get_content())
+                
+                logger.info(f"Retrieved {len(contexts)} documents successfully")
+                return contexts
 
-        except ValueError as e:
-            print(f"Errore durante il recupero dei documenti: {e}")
-            raise ValueError(f"Invalid retrieval mode: {e}")
+            except Exception as e:
+                logger.error(f"Retrieval attempt {attempt} failed: {e}")
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
+                
+                if attempt < max_retries:
+                    logger.info(f"Retrying in {backoff} seconds...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    logger.error("All retrieval attempts failed, returning empty list")
+                    return []
     
     def rerank(self, query: str, contexts: List[str]):
-        """
-        Reranks contexts based on their relevance to the query using Cohere's reranking model.
-        
-        Args:
-            query (str): The user query.
-            contexts (List[str]): List of context strings to rerank.
-            top_k (int): Number of top contexts to return.
-            
-        Returns:
-            List[dict]: List of dictionaries with context and its score, sorted by relevance.
-        """
+        """Reranks contexts based on relevance"""
+        logger = logging.getLogger(__name__)
         try:
-            print("---RERANK---")
+            logger.info(f"RERANK - Processing {len(contexts)} contexts")
             rerank_results = self.reranker.rerank(
-            model='rerank-v3.5',
-            query=query,
-            documents=contexts
+                model='rerank-v3.5',
+                query=query,
+                documents=contexts
             )
-    
+            
             docs_reranked = [contexts[result.index] for result in rerank_results.results]
-
-        
+            logger.info(f"Reranking completed, returned {len(docs_reranked)} documents")
             return docs_reranked
         except Exception as e:
-            print(f"Errore durante il reranking dei contesti: {e}")
+            logger.error(f"Reranking failed: {e}", exc_info=True)
             raise ValueError(f"Reranking failed: {e}")
 
-        
-
-    def grade_context(self,query: str, context: str) -> bool:
+    def combine_contexts(self, contexts: List[str]) -> str:
         """
-        Evaluates context relevance for the query.
-        
-        Args:
-            query (str): User query
-            context (str): Retrieved document context
-            
-        Returns:
-            bool: True if context is relevant
-            
-        Raises:
-            RuntimeError: If LLM evaluation fails
+        Combina i top contesti in un formato chiaro e strutturato
         """
-        print("---GRADE CONTEXT---")
-        time.sleep(1)
+        if not contexts:
+            return "Nessun contesto disponibile."
         
-    
+        combined = "=== CONTESTI RILEVANTI ===\n\n"
         
-        # Preparazione del prompt
-        system_prompt = """
-        Sei un esperto valutatore di pertinenza dei contenuti. Il tuo compito è valutare 
-        attentamente se il contesto fornito contiene informazioni realmente utili e pertinenti 
-        per rispondere alla query dell'utente.
-
-        Criteri di valutazione:
-        1. Specificità: Il contesto deve contenere informazioni specificamente correlate alla query
-        2. Utilità: Le informazioni devono essere utili per formulare una risposta
-        3. Cerca di capire se dal contenuto è possibile rispondere alla domanda anche in modo indiretto
-   
+        for i, context in enumerate(contexts, 1):
+            combined += f"--- CONTESTO {i} ---\n"
+            combined += f"{context.strip()}\n\n"
         
-        Devi fornire in formato JSON strutturato:
-        1. Un giudizio booleano (is_relevant)
-        2. Una spiegazione dettagliata del tuo ragionamento (reasoning)
-        """
+        combined += "=== FINE CONTESTI ==="
         
-        try:
-            # Chiamata all'API con function calling
-            response = self.llm.chat.completions.create(
-                model=cfg.LLM_LLAMA_70B, 
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Query: {query}\n\nContesto: {context}"}
-                ],
-                temperature=0.2,
-                response_format={"type": "json_object"}
-            )
-            
-            # Estrazione e validazione del risultato
-            result = json.loads(response.choices[0].message.content)
-            if not isinstance(result, dict) or 'is_relevant' not in result or 'reasoning' not in result:
-                raise ValueError("JSON di risposta non valido o incompleto")
-            print(f"Risultato: {result['reasoning']}")
-            return result['is_relevant']
-        except Exception as e:
-            raise RuntimeError(f"Errore durante la valutazione della rilevanza: {str(e)}")
-        
+        return combined
 
     def query_expansion(self, query: str) -> List[str]:
-        """
-        Expands query using LLM for better retrieval.
-        
-        Args:
-            query (str): Original query
-            
-        Returns:
-            str: Expanded query
-            
-        Raises:
-            ValueError: If expansion fails
-        """
-        print("---QUERY EXPANSION---")
+        """Expands query using LLM"""
+        logger = logging.getLogger(__name__)
+        logger.info("QUERY EXPANSION - Generating sub-queries")
         time.sleep(1)
         
         try:
-            
-    
-            # Preparazione del prompt
             system_prompt = '''Sei un assistente intelligente specializzato nell'analisi e nella riformulazione di query.  
-            Data una singola “query originale”, procedi nel modo seguente:
+            Data una singola "query originale", procedi nel modo seguente:
 
             1. Genera **tre sotto-query**:
             - Le prime **due** devono essere formulate come **domande**.
@@ -275,52 +221,58 @@ class Agent:
             }
             '''
             
-            # Chiamata all'API con la function call
             response = self.llm.chat.completions.create(
-                model=cfg.LLM_QWEN,  # o il modello Groq che stai utilizzando
+                model=cfg.LLM_LLAMA_70B,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Espandi questa query: {query}"},
                 ],
                 temperature=cfg.LLM_TEMPERATURE,
                 response_format={"type": "json_object"}
-
             )
-            
             
             expanded_queries = json.loads(response.choices[0].message.content)
             sotto_query = expanded_queries.get('sotto_query', [])
             if not isinstance(sotto_query, list):
                 raise ValueError("Campo 'sotto_query' mancante o non valido")
+            
             response = [subquery['subquery'] for subquery in sotto_query if 'subquery' in subquery]
+            logger.info(f"Query expansion generated {len(response)} sub-queries")
             return response
             
         except Exception as e:
+            logger.error(f"Query expansion failed: {e}", exc_info=True)
             raise ValueError(f"Errore nella query expansion: {e}")
     
     def generate_answer(self, query: str, context: str) -> str:
-        """
-        Generates predefined answer based on query and context.
-        
-        Args:
-            query (str): User query
-            context (str): Retrieved context
-            
-        Returns:
-            PredefinedAnswer: One of three possible responses:
-                - "Si"
-                - "No"
-                - "Si, ma senza una struttura ben definita"
-        """
-        print("---GENERATE ANSWER---")
+        """Generates predefined answer based on query and context"""
+        logger = logging.getLogger(__name__)
+        logger.info("GENERATE ANSWER - Creating response")
         time.sleep(1)
         
         # Preparazione del prompt
         system_prompt = """
-        Sei un assistente che deve selezionare una risposta tra tre opzioni predefinite:
-        1. "Si"
-        2. "No" 
-        3. "Si, ma senza una struttura ben definita"
+        Analizza il contesto e scegli la risposta più appropriata:
+
+        1. "Si" - L'organizzazione HA implementato completamente quanto richiesto con processi formali e documentati
+        2. "No" - L'organizzazione NON ha implementato quanto richiesto o non ci sono evidenze
+        3. "Si, ma senza una struttura ben definita" - L'organizzazione fa queste attività MA in modo informale, parziale, non documentato o non sistematico
+
+        CRITERI per "Si, ma senza una struttura ben definita":
+        - ✓ L'attività viene svolta MA senza procedure scritte
+        - ✓ Implementazione parziale o inconsistente
+        - ✓ Manca documentazione formale
+        - ✓ Non c'è un processo ripetibile
+        - ✓ Dipende da singole persone, non da processi
+
+        Esempi:
+        - Query: "Fate security review?"
+        Contesto: "Il team fa review quando si ricorda"
+        Risposta: "Si, ma senza una struttura ben definita"
+        
+        - Query: "Avete un processo di incident response?"
+        Contesto: "Gestiamo gli incidenti ma non abbiamo procedure scritte"
+        Risposta: "Si, ma senza una struttura ben definita"
         
         Analizza attentamente la query dell'utente e seleziona l'opzione più appropriata in base al contesto fornito.
         Non inventare altre risposte o formati. Devi restituire SOLO una delle tre opzioni specificate in formato JSON.
@@ -333,9 +285,8 @@ class Agent:
         }
         """
         try:
-            # Chiamata all'API con la function call
             response = self.llm.chat.completions.create(
-                model=cfg.LLM_LLAMA_70B,  
+                model=cfg.LLM_LLAMA_70B,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Query: {query}\n Context: {context}"}
@@ -343,38 +294,21 @@ class Agent:
                 temperature=cfg.LLM_TEMPERATURE,
                 response_format={"type": "json_object"}
             )
-            # Estrazione e validazione del risultato
+            
             result = json.loads(response.choices[0].message.content)
             if not isinstance(result, dict) or 'response' not in result or 'justification' not in result:
                 raise ValueError("JSON di risposta non valido o incompleto")
+            
+            logger.info(f"Generated answer: {result['response']}")
             return result['response'], result['justification']
         except Exception as e:
+            logger.error(f"Answer generation failed: {e}", exc_info=True)
             raise ValueError(f"Errore durante la generazione della risposta: {e}")
-        
-        
-        
 
-
-    def compile_and_save(self,question:str, answer: str,context: str,justification: str):
-        """
-        Saves Q&A pair to an Excel file.
-        
-        Args:
-            question_id (int): Question identifier
-            question (str): Question text
-            answer (str): Generated answer
-                
-        Creates Excel file with columns:
-            - Question ID
-            - Question
-            - Answer
-            - Context
-            - justification
-            - Timestamp
-            
-        File location: cfg.RESULTS_DIR/responses.xlsx
-        """
-        print("---COMPILE AND SAVE---")
+    def compile_and_save(self, question: str, answer: str, context: str, justification: str):
+        """Saves Q&A pair to Excel file"""
+        logger = logging.getLogger(__name__)
+        logger.info(f"COMPILE AND SAVE - Saving question {self.question_id}")
         
         excel_file = os.path.join(cfg.RESULTS_DIR, 'responses.xlsx')
         os.makedirs(cfg.RESULTS_DIR, exist_ok=True)
@@ -426,10 +360,10 @@ class Agent:
             # Save and close
             writer.close()
             
-            print(f"Saved Q&A to {excel_file}")
+            logger.info(f"Successfully saved Q&A to {excel_file}")
             
         except Exception as e:
-            print(f"Error while handling Excel file: {e}")
+            logger.error(f"Error saving to Excel: {e}", exc_info=True)
             raise
     
     def jaccard_similarity(self,text1: str, text2: str) -> float:
