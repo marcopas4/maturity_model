@@ -57,7 +57,7 @@ def compile(agent: Agent) -> None:
             'justification': None
         }
 
-    for idx in range(122,len(agent.questions)):
+    for idx in range(len(agent.questions)):
         question = agent.questions[idx]
         logger.info(f"Processing question {idx + 1}/{len(agent.questions)}: {question[:100]}...")
         
@@ -112,18 +112,34 @@ def compile(agent: Agent) -> None:
             top_contexts = state['retrieved_docs'][:5]
             logger.info(f"Using top {len(top_contexts)} contexts for question {idx + 1}")
             
-            # Concatena i contesti in modo chiaro
-            combined_context = agent.combine_contexts(top_contexts)
+            # HUMAN IN THE LOOP: lascia che l'utente scelga il contesto più rilevante
+            selected_context = agent.human_context_selection(question, top_contexts)
             
-            # Genera risposta usando il contesto combinato
-            state['answer'], state['justification'] = agent.generate_answer(query=question, context=combined_context)
+            # Gestisci casi speciali
+            if selected_context == "SKIPPED_BY_USER":
+                logger.info(f"Question {idx + 1} skipped by user")
+                agent.compile_and_save(
+                    question=question, 
+                    answer="SKIPPED", 
+                    justification="Domanda saltata dall'utente", 
+                    context="N/A"
+                )
+                agent.question_id += 1
+                continue
+                
+            elif selected_context == "INTERRUPTED_BY_USER":
+                logger.info("Process interrupted by user")
+                break
+            
+            # Genera risposta usando il contesto selezionato
+            state['answer'], state['justification'] = agent.generate_answer(query=question, context=selected_context)
             
             # Salva il risultato
             agent.compile_and_save(
                 question=question, 
                 answer=state['answer'], 
                 justification=state['justification'], 
-                context=combined_context
+                context=selected_context
             )
             
             logger.info(f"Successfully answered question {idx + 1}")

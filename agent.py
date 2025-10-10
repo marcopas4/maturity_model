@@ -39,7 +39,7 @@ class Agent:
         docstore (SimpleDocumentStore): Document storage system
     """
     def __init__(self):
-        self.question_id: int = 123# question ID
+        self.question_id: int = 0# question ID
 
         self.questions: List[str] = []
         self.llm = OpenAI(
@@ -257,13 +257,18 @@ class Agent:
         1. "Si" - L'organizzazione HA implementato completamente quanto richiesto con processi formali e documentati
         2. "No" - L'organizzazione NON ha implementato quanto richiesto o non ci sono evidenze
         3. "Si, ma senza una struttura ben definita" - L'organizzazione fa queste attività MA in modo informale, parziale, non documentato o non sistematico
-
+        4. "Si, ma con controlli che avvengono in oltre un anno" - Le pratiche e i controlli richiesti sono svolti per un periodo superiore ad un anno
+        
         CRITERI per "Si, ma senza una struttura ben definita":
         - ✓ L'attività viene svolta MA senza procedure scritte
         - ✓ Implementazione parziale o inconsistente
         - ✓ Manca documentazione formale
         - ✓ Non c'è un processo ripetibile
         - ✓ Dipende da singole persone, non da processi
+
+        CRITERI per "Si, ma con controlli che avvengono in oltre un anno":
+        - ✓ Le pratiche e i controlli richiesti sono svolti per un periodo superiore ad un anno
+        - ✓ Si riferisce a domande di tipo temporale (es. "Fate dei review annuali di...")
 
         Esempi:
         - Query: "Fate security review?"
@@ -399,6 +404,80 @@ class Agent:
                 unique_contexts.append(context)
         
         return unique_contexts
+    
+    def human_context_selection(self, question: str, contexts: List[str]) -> str:
+        """
+        Permette all'utente di selezionare il contesto più rilevante
+        """
+        logger = logging.getLogger(__name__)
+        logger.info("HUMAN CONTEXT SELECTION - Waiting for user input")
+        
+        print("\n" + "="*80)
+        print(f"DOMANDA: {question}")
+        print("="*80)
+        print("\nContesti disponibili:")
+        print("-"*40)
+        
+        # Mostra i contesti con numerazione
+        for i, context in enumerate(contexts, 1):
+            print(f"\n[{i}] CONTESTO {i}:")
+            print(f"{context[:500]}..." if len(context) > 500 else context)
+            print("-"*40)
+        
+        # Opzioni aggiuntive
+        print(f"\n[{len(contexts) + 1}] Combina TUTTI i contesti")
+        print(f"[{len(contexts) + 2}] Salta questa domanda")
+        print(f"[0] Mostra contesti completi")
+        
+        while True:
+            try:
+                choice = input(f"\nScegli il contesto più rilevante (1-{len(contexts) + 2}, 0 per dettagli): ").strip()
+                
+                if choice == "0":
+                    # Mostra contesti completi
+                    self._show_full_contexts(contexts)
+                    continue
+                    
+                choice_num = int(choice)
+                
+                if 1 <= choice_num <= len(contexts):
+                    selected = contexts[choice_num - 1]
+                    logger.info(f"User selected context {choice_num}")
+                    return selected
+                    
+                elif choice_num == len(contexts) + 1:
+                    # Combina tutti i contesti
+                    combined = self.combine_contexts(contexts)
+                    logger.info("User chose to combine all contexts")
+                    return combined
+                    
+                elif choice_num == len(contexts) + 2:
+                    # Salta la domanda
+                    logger.info("User chose to skip question")
+                    return "SKIPPED_BY_USER"
+                    
+                else:
+                    print(f"Scelta non valida. Inserisci un numero tra 1 e {len(contexts) + 2}")
+                    
+            except ValueError:
+                print("Inserisci un numero valido")
+            except KeyboardInterrupt:
+                print("\nOperazione interrotta dall'utente")
+                logger.info("User interrupted context selection")
+                return "INTERRUPTED_BY_USER"
+
+    def _show_full_contexts(self, contexts: List[str]):
+        """Mostra i contesti completi per una valutazione dettagliata"""
+        print("\n" + "="*80)
+        print("CONTESTI COMPLETI:")
+        print("="*80)
+        
+        for i, context in enumerate(contexts, 1):
+            print(f"\n[{i}] CONTESTO COMPLETO {i}:")
+            print(context)
+            print("-"*80)
+            
+        input("\nPremi ENTER per tornare alla selezione...")
 
 
 
